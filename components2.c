@@ -18,46 +18,27 @@
 #include "bit.h"
 #include "keypad.h"
 
-void transmit_data(unsigned short data) {
-	// for each bit of data
-	unsigned char i;
-	unsigned char SRCLR = 0, CLK_1 = 0, CLK_2 = 0, SER = 0;
-	unsigned char msb;
-	SER = 0;
-	CLK_1 = 2;
-	SRCLR = 1;
-	CLK_2 = 3;
-	// Set SRCLR to 1 allowing data to be set
-	PORTC = SetBit(PORTC,SRCLR,1);
-	for (i=0;i<16;i++)
-	{
-		if(data & (1 << (15-i)))
-		{
-			msb = 1;
-		}
-		else
-		{
-			msb = 0;
-		}
-		// Also clear SRCLK in preparation of sending data
-		PORTC = SetBit(PORTC,CLK_1,0);
-		PORTC = SetBit(PORTC,CLK_2,0);
-		// set SER = next bit of data to be sent.
-		PORTC = SetBit(PORTC,SER,msb);
-		// set SRCLK = 1. Rising edge shifts next bit of data into the shift register
-		PORTC = SetBit(PORTC,CLK_1,1);
-		PORTC = SetBit(PORTC,CLK_2,1);
-		// end for each bit of data
-	}
-	// clears all lines in preparation of a new transmission
-	PORTC = SetBit(PORTC,CLK_1,0);
-	PORTC = SetBit(PORTC,CLK_2,0);
-	PORTC = SetBit(PORTC,CLK_1,1);
-	PORTC = SetBit(PORTC,CLK_2,1);
-	PORTC = SetBit(PORTC,SRCLR,0);
+unsigned char status = 0x03;
+unsigned char receivedData = 0;
+
+// Servant code
+void SPI_ServantInit(void) {
+	// set DDRB to have MISO line as output and MOSI, SCK, and SS as input
+	DDRB = 0x40;
+	PORTB = 0xBF;
+	// set SPCR register to enable SPI and enable SPI interrupt (pg. 168)
+	SPCR = 1<<6 | 1<<7;
+	// make sure global interrupts are enabled on SREG register (pg. 9)
+	//SREG = 1<<7;
+	sei();
 }
 
-
+ISR(SPI_STC_vect) { // this is enabled in with the SPCR register
+	// Interrupt Enable	// SPDR contains the received data, e.g. unsigned char receivedData =
+	// SPDR;
+	receivedData = SPDR;
+	SPDR = status;
+}
 // The following code is for DEBUGGING
 
 // End of DEBUGGING code
@@ -76,18 +57,20 @@ void Motion_Tick()
 	//Actions
 	switch(motion_state) {
 		case init_motion:
-			PORTB = SetBit(PORTB, 1, 0);
+			PORTC = SetBit(PORTC, 1, 0);
 			motion_cnt = 0;
+			status = status | 0x01;
 		break;
 		case wait_motion:
-			PORTB = SetBit(PORTB, 1, 0);
+			PORTC = SetBit(PORTC, 1, 0);
+			status = status & 0xFE;
 		break;
 		case update_motion:
 			motion_cnt++;
-			PORTB = SetBit(PORTB, 1, 1);
+			PORTC = SetBit(PORTC, 1, 1);
 		break;
 		case reset_motion:
-			PORTB = SetBit(PORTB, 1, 0);
+			PORTC = SetBit(PORTC, 1, 0);
 			motion_cnt = 0;
 		break;
 		default:
@@ -163,15 +146,15 @@ void PIR_Tick()
 	//Actions
 	switch(PIR_state) {
 		case off_PIR:
-			PORTB = SetBit(PORTB, 0, 0);
+			PORTC = SetBit(PORTC, 0, 0);
 			active_motion = 0;
 		break;
 		case on_PIR:
-			PORTB = SetBit(PORTB, 0, 1);
+			PORTC = SetBit(PORTC, 0, 1);
 			active_motion = 1;
 		break;
 		default:
-			PORTB = SetBit(PORTB, 0, 0);
+			PORTC = SetBit(PORTC, 0, 0);
 		break;
 	}
 	//Transitions
@@ -217,123 +200,6 @@ void StartPIRPulse(unsigned portBASE_TYPE Priority)
 	xTaskCreate(PIRTask, (signed portCHAR *)"PIRTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
 }
 
-// Debugging
-// enum KeyState {init_Key, update_Key} Key_state;
-// unsigned char key = ' ';
-// 
-// void Key_Init()
-// {
-// 	Key_state = init_Key;
-// }
-// 
-// void Key_Tick()
-// {
-// 	key = GetKeypadKey();
-// 	//Actions
-// 	switch(Key_state) {
-// 		case init_Key:
-// 			transmit_data(0x00F0);
-// 		break;
-// 		case update_Key:
-// 			if (key == '1')
-// 			{
-// 				transmit_data(0x0001);
-// 			} 
-// 			else if (key == '2')
-// 			{
-// 				transmit_data(0x0002);
-// 			}
-// 			else if (key == '3')
-// 			{
-// 				transmit_data(0x0003);
-// 			}
-// 			else if (key == '4')
-// 			{
-// 				transmit_data(0x0004);
-// 			}
-// 			else if (key == '5')
-// 			{
-// 				transmit_data(0x0005);
-// 			}
-// 			else if (key == '6')
-// 			{
-// 				transmit_data(0x0006);
-// 			}
-// 			else if (key == '7')
-// 			{
-// 				transmit_data(0x0007);
-// 			}
-// 			else if (key == '8')
-// 			{
-// 				transmit_data(0x0008);
-// 			}
-// 			else if (key == '9')
-// 			{
-// 				transmit_data(0x0009);
-// 			}
-// 			else if (key == 'A')
-// 			{
-// 				transmit_data(0x000A);
-// 			}
-// 			else if (key == 'B')
-// 			{
-// 				transmit_data(0x000B);
-// 			}
-// 			else if (key == 'C')
-// 			{
-// 				transmit_data(0x000C);
-// 			}
-// 			else if (key == 'D')
-// 			{
-// 				transmit_data(0x000D);
-// 			}
-// 			else if (key == '*')
-// 			{
-// 				transmit_data(0x000E);
-// 			}
-// 			else if (key == '0')
-// 			{
-// 				transmit_data(0x000F);
-// 			}
-// 			else if (key == '#')
-// 			{
-// 				transmit_data(0x0010);
-// 			}
-// 		break;
-// 		default:
-// 			PORTB = SetBit(PORTB, 0, 0);
-// 		break;
-// 	}
-// 	//Transitions
-// 	switch(Key_state){
-// 		case init_Key:
-// 			Key_state = update_Key;
-// 		break;
-// 		case update_Key:
-// 			Key_state = update_Key;
-// 		break;
-// 		default:
-// 			Key_state = init_Key;
-// 		break;
-// 	}
-// }
-// 
-// void KeyTask()
-// {
-// 	Key_Init();
-// 	for (;;)
-// 	{
-// 		Key_Tick();
-// 		vTaskDelay(100);
-// 	}
-// }
-// 
-// void StartKeyPulse(unsigned portBASE_TYPE Priority)
-// {
-// 	xTaskCreate(KeyTask, (signed portCHAR *)"KeyTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
-// }
-// End of Debugging
-
 enum KeyState {lock_Key, check_Key, compare_Key, unlock_Key} Key_state;
 unsigned char key = ' ';
 unsigned char passcode[4] = {'1', '2', '3', '4'};
@@ -351,7 +217,9 @@ void Key_Tick()
 	//Actions
 	switch(Key_state) {
 		case lock_Key:
-			PORTB = SetBit(PORTB, 2, 0);
+			PORTC = SetBit(PORTC, 2, 0);
+			PORTC = SetBit(PORTC, 3, 0);
+			status |= 0x02;
 		break;
 		case check_Key:
 			if (key == passcode[passNum])
@@ -359,6 +227,8 @@ void Key_Tick()
 				key_complete++;
 			}
 			passNum++;
+			PORTC = SetBit(PORTC, 2, 1);
+			_delay_ms(50);
 		break;
 		case compare_Key:
 			passNum = 0;
@@ -369,11 +239,13 @@ void Key_Tick()
 			key_complete = 0;
 		break;
 		case unlock_Key:
-			PORTB = SetBit(PORTB, 2, 1);
 			key_open = 0;
+			status &= 0xFD;
+			PORTC = SetBit(PORTC, 3, 1);
 		break;
 		default:
-			PORTB = SetBit(PORTB, 2, 0);
+			PORTC = SetBit(PORTC, 2, 0);
+			PORTC = SetBit(PORTC, 3, 0);
 		break;
 	}
 	key = GetKeypadKey();
@@ -407,7 +279,7 @@ void Key_Tick()
 			}
 		break;
 		case unlock_Key:
-			if (key == '#')
+			if (receivedData == 0x80)
 			{
 				Key_state = lock_Key;
 			}
@@ -440,9 +312,9 @@ void StartKeyPulse(unsigned portBASE_TYPE Priority)
 int main(void)
 {
 	DDRA = 0x00; PORTA = 0xFF;
-	DDRB = 0xFF; PORTB = 0x00;
 	DDRC = 0xFF; PORTC = 0x00;
 	DDRD = 0xF0; PORTD = 0x0F;
+	SPI_ServantInit();
 	//Start Tasks
 	StartMotionPulse(1);
 	StartPIRPulse(1);
