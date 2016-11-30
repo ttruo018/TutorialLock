@@ -17,12 +17,41 @@
 #include "croutine.h"
 #include "bit.h"
 
+#define MAX_PARTS 2 
+
 unsigned char direction;
 unsigned char motor_output;
 unsigned char motor_complete;
 unsigned int phases;
 unsigned int degree;
 unsigned short period = 5;
+unsigned char receivedData[MAX_PARTS] = {0xFF};
+
+// Master code
+void SPI_MasterInit(void) {
+	// Set DDRB to have MOSI, SCK, and SS as output and MISO as input
+	DDRB = 0xBF;
+	PORTB = 0x1F;
+	// Set SPCR register to enable SPI, enable master, and use SCK frequency
+	//   of fosc/16  (pg. 168)
+	SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR0);
+	
+	// Make sure global interrupts are enabled on SREG register (pg. 9)
+	sei();
+}
+
+void SPI_MasterTransmit(unsigned char cData, unsigned char ss) {
+	// data in SPDR will be transmitted, e.g. SPDR = cData;
+	// set SS low
+	PORTB = 0x1F & ~(1<<ss);
+	SPDR = cData;
+	while(!(SPSR & (1<<SPIF))) { // wait for transmission to complete
+		;
+	}
+	receivedData[ss] = SPDR;
+	// set SS high
+	PORTB = 0x1F;
+}
 
 enum MotorState {motor_init, A, AB, B, BC, C, CD, D, DA} motor_state;
 void Motor_Init(){
@@ -216,6 +245,7 @@ void Control_Init() {
 
 void Control_Tick(){
 	//Actions
+	unsigned char cnt;
 	switch(control_state){
 		case control_init:
 			degree = 135;
@@ -226,10 +256,18 @@ void Control_Tick(){
 		break;
 		case lock:
 			direction = 0;
+			for (cnt = 0; cnt<MAX_PARTS; cnt++)
+			{
+				SPI_MasterTransmit(0x01, cnt);
+			}
 		break;
 		case unlock:
 			direction = 1;
 			phases = (degree / 5.625) * 64;
+			for (cnt = 0; cnt<MAX_PARTS; cnt++)
+			{
+				SPI_MasterTransmit(0x02, cnt);
+			}
 		break;
 		case opening:
 		break;
@@ -237,6 +275,10 @@ void Control_Tick(){
 			direction = 0;
 		break;
 		case reset:
+			for (cnt = 0; cnt<MAX_PARTS; cnt++)
+			{
+				SPI_MasterTransmit(0x80, cnt);
+			}
 			direction = 2;
 			phases = (degree / 5.625) * 64;
 		break;
@@ -244,12 +286,18 @@ void Control_Tick(){
 		break;
 	}
 	//Transitions
+	unsigned char sum = 0;
 	switch(control_state){
 		case control_init:
 			control_state = lock;
 		break;
 		case lock:
-			if (!GetBit(PIND, 0))
+			for (cnt=0; cnt<MAX_PARTS; cnt++)
+			{
+				sum |= receivedData[cnt];
+			}
+			PORTC = sum;
+			if (sum == 0x00)
 			{
 				control_state = unlock;
 			}
@@ -269,7 +317,7 @@ void Control_Tick(){
 			}
 		break;
 		case open:
-			if (!GetBit(PIND, 1))
+			if (!GetBit(PIND, 0))
 			{
 				control_state = reset;
 			}
@@ -312,7 +360,9 @@ void StartControlPulse(unsigned portBASE_TYPE Priority)
 int main(void)
 {
 	DDRA = 0xFF;
+	DDRC = 0xFF;
 	DDRD = 0x00; PORTD = 0xFF;
+	SPI_MasterInit();
 	//Start Tasks
 	StartMotorPulse(1);
 	StartControlPulse(1);

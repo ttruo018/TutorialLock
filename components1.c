@@ -38,183 +38,38 @@ void Set_A2D_Pin(unsigned char pinNum) {
 	for ( i=0; i<15; i++ ) { asm("nop"); }
 }
 
-void transmit_data(unsigned short data) {
-	// for each bit of data
-	unsigned char i;
-	unsigned char SRCLR = 0, CLK_1 = 0, CLK_2 = 0, SER = 0;
-	unsigned char msb;
-	SER = 0;
-	CLK_1 = 2;
-	SRCLR = 1;
-	CLK_2 = 3;
-	// Set SRCLR to 1 allowing data to be set
-	PORTC = SetBit(PORTC,SRCLR,1);
-	for (i=0;i<16;i++)
-	{
-		if(data & (1 << (15-i)))
-		{
-			msb = 1;
-		}
-		else
-		{
-			msb = 0;
-		}
-		// Also clear SRCLK in preparation of sending data
-		PORTC = SetBit(PORTC,CLK_1,0);
-		PORTC = SetBit(PORTC,CLK_2,0);
-		// set SER = next bit of data to be sent.
-		PORTC = SetBit(PORTC,SER,msb);
-		// set SRCLK = 1. Rising edge shifts next bit of data into the shift register
-		PORTC = SetBit(PORTC,CLK_1,1);
-		PORTC = SetBit(PORTC,CLK_2,1);
-		// end for each bit of data
-	}
-	// clears all lines in preparation of a new transmission
-	PORTC = SetBit(PORTC,CLK_1,0);
-	PORTC = SetBit(PORTC,CLK_2,0);
-	PORTC = SetBit(PORTC,CLK_1,1);
-	PORTC = SetBit(PORTC,CLK_2,1);
-	PORTC = SetBit(PORTC,SRCLR,0);
-}
-
-
-unsigned char pinADC = 0x00;
 unsigned short force1_input = 0;
 unsigned short force2_input = 0;
 unsigned short light_input = 0;
-unsigned char reset = 0;
-unsigned short debug_output = 0;
+unsigned char status = 0x03;
+unsigned char receivedData = 0;
+
+// Servant code
+void SPI_ServantInit(void) {
+	// set DDRB to have MISO line as output and MOSI, SCK, and SS as input
+	DDRB = 0x40;
+	PORTB = 0xBF;
+	// set SPCR register to enable SPI and enable SPI interrupt (pg. 168)
+	SPCR = 1<<6 | 1<<7;
+	// make sure global interrupts are enabled on SREG register (pg. 9)
+	//SREG = 1<<7;
+	sei();
+}
+
+ISR(SPI_STC_vect) { // this is enabled in with the SPCR register
+	// Interrupt Enable	// SPDR contains the received data, e.g. unsigned char receivedData =
+	// SPDR;
+	receivedData = SPDR;
+	SPDR = status;
+}
 
 // The following code is for DEBUGGING
-enum LEDState {on, off} led_state;
-
-void LEDS_Init(){
-	led_state = off;
-}
-
-void LEDS_Tick(){
-	Set_A2D_Pin(pinADC);
-	_delay_ms(5);
-	debug_output = ADC;
-	//Actions
-	switch(led_state){
-		case off:
-			transmit_data(0x0000);
-		break;
-		case on:
-			transmit_data(debug_output);
-		break;
-		default:
-			transmit_data(0x0000);
-		break;
-	}
-	//Transitions
-	switch(led_state){
-		case off:
-			led_state = on;
-		break;
-		case on:
-			led_state = on;
-		break;
-		default:
-			led_state = off;
-		break;
-	}
-}
-
-void LedSecTask()
-{
-	LEDS_Init();
-   for(;;) 
-   { 	
-	LEDS_Tick();
-	vTaskDelay(50); 
-   } 
-}
-
-void StartSecPulse(unsigned portBASE_TYPE Priority)
-{
-	xTaskCreate(LedSecTask, (signed portCHAR *)"LedSecTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
-}	
-
-enum ButtonState {start, check, force, light} button_state;
-
-void Button_Init(){
-	button_state = start;
-}
-
-void Button_Tick(){
-	//Actions
-	switch(button_state){
-		case start:
-			pinADC = 0x00;
-		break;
-		case check:
-		break;
-		case force:
-			pinADC = 0x00;
-			reset = 0;
-		break;
-		case light:
-			pinADC = 0x01;
-			reset = 1;
-		break;
-		default:
-			pinADC = 0x00;
-		break;
-	}
-	//Transitions
-	switch(button_state){
-		case start:
-			button_state = force;
-		break;
-		case check:
-			if(!GetBit(PINB, 1))
-			{
-				button_state = force;
-			}
-			else if (!GetBit(PINB, 2))
-			{
-				button_state = light;
-			}
-			else
-			{
-				button_state = check;
-			}
-		break;
-		case force:
-			button_state = check;
-		break;
-		case light:
-			button_state = check;
-		break;
-		default:
-			button_state = start;
-		break;
-	}
-}
-
-void ButtonSecTask()
-{
-	Button_Init();
-	for(;;)
-	{
-		Button_Tick();
-		vTaskDelay(50);
-	}
-}
-
-void StartButtonPulse(unsigned portBASE_TYPE Priority)
-{
-	xTaskCreate(ButtonSecTask, (signed portCHAR *)"ButtonSecTask", configMINIMAL_STACK_SIZE, NULL, Priority, NULL );
-}
-
 // End of DEBUGGING code
 
 enum FSRState {check_force, increment_force, finish_force, reset_force} force_state;
 unsigned short force_cnt = 0;
-unsigned short force_low_range = 0x0180;
-unsigned short force_high_range = 0x0200;
+unsigned short force_low_range = 0x0200;
+unsigned short force_high_range = 0x0300;
 
 void FSR_Init(){
 	force_state = check_force;
@@ -230,20 +85,22 @@ void FSR_Tick(){
 	//Actions
 	switch(force_state){
 		case check_force:
-			PORTD = SetBit(PORTD, 0, 0);
+			PORTC = SetBit(PORTC, 0, 0);
 			force_cnt = 0;
+			status |= 0x01;
 		break;
 		case increment_force:
 			force_cnt++;
 		break;
 		case finish_force:
-			PORTD = SetBit(PORTD, 0, 1);
+			PORTC = SetBit(PORTC, 0, 1);
+			status &= 0xFE;
 		break;
 		case reset_force:
 			force_cnt = 0;
 		break;
 		default:
-			PORTD = SetBit(PORTD, 0, 0);
+			PORTC = SetBit(PORTC, 0, 0);
 		break;
 	}
 	//Transitions
@@ -275,7 +132,7 @@ void FSR_Tick(){
 				force_state = check_force;
 			}
 		case finish_force:
-			if (reset == 1)
+			if (receivedData == 0x80)
 			{
 				force_state = reset_force;
 			} 
@@ -285,7 +142,7 @@ void FSR_Tick(){
 			}
 		break;
 		case reset_force:
-			if (reset == 0)
+			if (receivedData == 0x01)
 			{
 				force_state = check_force;
 			} 
@@ -328,13 +185,15 @@ void Light_Tick(){
 	//Actions
 	switch(light_state){
 		case wrong_light:
-			PORTD = SetBit(PORTD, 1, 0);
+			PORTC = SetBit(PORTC, 1, 0);
+			status |= 0x02;
 		break;
 		case correct_light:
-			PORTD = SetBit(PORTD, 1, 1);
+			PORTC = SetBit(PORTC, 1, 1);
+			status &= 0xFD;
 		break;
 		default:
-			PORTD = SetBit(PORTD, 1, 0);
+			PORTC = SetBit(PORTC, 1, 0);
 		break;
 	}
 	//Transitions
@@ -383,12 +242,10 @@ void StartLightPulse(unsigned portBASE_TYPE Priority)
 int main(void) 
 { 
    A2D_init();
-   DDRB = 0x00; PORTB = 0xFF;
    DDRC = 0xFF;
-   DDRD = 0xFF; PORTD = 0x00;
+   DDRD = 0x00; PORTD = 0xFF;
+   SPI_ServantInit();
    //Start Tasks  
-   StartSecPulse(1);
-   StartButtonPulse(1);
    StartFSRPulse(1);
    StartLightPulse(1);
     //RunSchedular 
